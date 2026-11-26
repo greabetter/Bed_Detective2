@@ -1,0 +1,27 @@
+# ---- build output ----
+Debug/
+Release/
+.settings/
+.metadata/
+*.launch
+
+# ---- objects / binaries ----
+*.o
+*.d
+*.su
+*.elf
+*.bin
+*.hex
+*.map
+*.list
+*.axf
+*.lnp
+*.dep
+*.cyclo
+
+# ---- third party (download separately) ----
+lvgl/
+
+# ---- system ----
+Thumbs.db
+.DS_Store
