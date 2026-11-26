@@ -24,12 +24,11 @@ static void disp_flush(lv_display_t * d, const lv_area_t * area, uint8_t * px_ma
 {
     uint32_t w = lv_area_get_width(area);
     uint32_t h = lv_area_get_height(area);
-
     LCD_SetWindow(area->x1, area->y1, area->x2, area->y2);
 
     DC_DATA();
     CS_L();
-    HAL_SPI_Transmit(&hspi1, px_map, w * h * 2, 1000);
+    HAL_SPI_Transmit(&hspi1, px_map, w*h*2, 1000);
     CS_H();
 
     lv_display_flush_ready(d);      /* 阻塞版：发完立刻通知 */
@@ -39,10 +38,11 @@ void lv_port_init(void)
 {
     lv_init();
     lv_tick_set_cb(HAL_GetTick);    /* 用 HAL 的毫秒计数当 tick */
-
     disp = lv_display_create(240, 320);
+    lv_display_set_color_format(disp, LV_COLOR_FORMAT_RGB565_SWAPPED);   /* ← 关键 */
     lv_display_set_flush_cb(disp, disp_flush);
     lv_display_set_buffers(disp, draw_buf, NULL, sizeof(draw_buf),
                            LV_DISPLAY_RENDER_MODE_PARTIAL);
+
 }
 

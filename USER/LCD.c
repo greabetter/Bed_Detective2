@@ -54,6 +54,7 @@ void LCD_Init(void)
     { uint8_t d = 0x48; LCD_WriteData(&d, 1); }   /* MX + BGR，竖屏 */
 
     LCD_WriteCmd(0x29);          /* 开显示 */
+   // LCD_WriteCmd(0x21);   /* INVON */
     HAL_Delay(20);
 }
 
