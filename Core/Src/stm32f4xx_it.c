@@ -86,7 +86,23 @@ void NMI_Handler(void)
 void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
+	  extern UART_HandleTypeDef huart1;
+	  static const char msg[] = "\r\n!!! HARDFAULT !!!\r\n";
+	  HAL_UART_Transmit(&huart1, (uint8_t *)msg, sizeof(msg) - 1, 100);
 
+	  /* 打印出错地址，能定位到具体函数 */
+	  uint32_t *sp = (uint32_t *)__get_MSP();
+	  char buf[48];
+	  int n = 0;
+	  /* 简单格式化：PC 和 LR */
+	  const char *hex = "0123456789ABCDEF";
+	  char out[40] = "PC=0x00000000 LR=0x00000000\r\n";
+	  uint32_t pc = sp[6], lr = sp[5];
+	  for (int i = 0; i < 8; i++) {
+	      out[5 + i]       = hex[(pc >> (28 - i * 4)) & 0xF];
+	      out[21 + i]      = hex[(lr >> (28 - i * 4)) & 0xF];
+	  }
+	  HAL_UART_Transmit(&huart1, (uint8_t *)out, 30, 100);
   /* USER CODE END HardFault_IRQn 0 */
   while (1)
   {

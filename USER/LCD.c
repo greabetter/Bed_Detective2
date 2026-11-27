@@ -54,7 +54,7 @@ void LCD_Init(void)
     { uint8_t d = 0x48; LCD_WriteData(&d, 1); }   /* MX + BGR，竖屏 */
 
     LCD_WriteCmd(0x29);          /* 开显示 */
-   // LCD_WriteCmd(0x21);   /* INVON */
+    LCD_WriteCmd(0x21);   /* INVON */
     HAL_Delay(20);
 }
 
@@ -70,18 +70,5 @@ void LCD_SetWindow(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2)
     LCD_WriteData(b, 4);
 
     LCD_WriteCmd(0x2C);   /* 写显存 */
-}
-
-void LCD_Fill(uint16_t color)
-{
-    uint8_t hi = color >> 8, lo = color & 0xFF;
-    uint8_t buf[512];
-    for (int i = 0; i < 512; i += 2) { buf[i] = hi; buf[i+1] = lo; }
-
-    LCD_SetWindow(0, 0, 239, 319);
-    DC_DATA(); CS_L();
-    for (int i = 0; i < 240 * 320 * 2 / 512; i++)
-        HAL_SPI_Transmit(&hspi1, buf, 512, 1000);
-    CS_H();
 }
 

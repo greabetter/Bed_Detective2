@@ -27,6 +27,8 @@
 #include "lv_port.h"
 #include "myTask.h"
 #include "key.h"
+#include "log.h"
+#include "ft6336.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -45,9 +47,13 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+I2C_HandleTypeDef hi2c1;
+
 RTC_HandleTypeDef hrtc;
 
 SPI_HandleTypeDef hspi1;
+
+UART_HandleTypeDef huart1;
 
 /* Definitions for defaultTask */
 osThreadId_t defaultTaskHandle;
@@ -60,7 +66,7 @@ const osThreadAttr_t defaultTask_attributes = {
 osThreadId_t lv_TimertaskHandle;
 const osThreadAttr_t lv_Timertask_attributes = {
   .name = "lv_Timertask",
-  .stack_size = 1024 * 4,
+  .stack_size = 1536 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
 /* Definitions for KEY_HandleTask */
@@ -85,6 +91,8 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_RTC_Init(void);
+static void MX_I2C1_Init(void);
+static void MX_USART1_UART_Init(void);
 void StartDefaultTask(void *argument);
 void lv_Timerhandler_Task(void *argument);
 void KEY_Task(void *argument);
@@ -94,7 +102,31 @@ void KEY_Task(void *argument);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static void touch_test(void)
+{
+    LOG("=== I2C scan ===\r\n");
+    for (uint8_t a = 0x08; a < 0x78; a++) {
+        if (HAL_I2C_IsDeviceReady(&hi2c1, a << 1, 2, 10) == HAL_OK) {
+            LOG("  found 0x%02X\r\n", a);
+        }
+    }
 
+    LOG("=== touch init ===\r\n");
+    if (!ft6336_init()) {
+        LOG("  FAIL\r\n");
+        return;
+    }
+    LOG("  OK\r\n");
+
+    LOG("=== read 5s, touch the screen ===\r\n");
+    for (int i = 0; i < 50; i++) {
+        uint16_t x, y;
+        if (ft6336_read(&x, &y)) {
+            LOG("  x=%d y=%d\r\n", x, y);
+        }
+        osDelay(100);
+    }
+}
 /* USER CODE END 0 */
 
 /**
@@ -128,6 +160,8 @@ int main(void)
   MX_GPIO_Init();
   MX_SPI1_Init();
   MX_RTC_Init();
+  MX_I2C1_Init();
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
   LCD_Init();
 
@@ -172,6 +206,7 @@ int main(void)
 
   /* USER CODE BEGIN RTOS_EVENTS */
   /* add events, ... */
+  HAL_UART_Transmit(&huart1, (uint8_t *)"BOOT\r\n", 6, 100);
   /* USER CODE END RTOS_EVENTS */
 
   /* Start scheduler */
@@ -214,7 +249,7 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.LSEState = RCC_LSE_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL.PLLM = 25;
+  RCC_OscInitStruct.PLL.PLLM = 8;
   RCC_OscInitStruct.PLL.PLLN = 336;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
   RCC_OscInitStruct.PLL.PLLQ = 4;
@@ -236,6 +271,40 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+}
+
+/**
+  * @brief I2C1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_I2C1_Init(void)
+{
+
+  /* USER CODE BEGIN I2C1_Init 0 */
+
+  /* USER CODE END I2C1_Init 0 */
+
+  /* USER CODE BEGIN I2C1_Init 1 */
+
+  /* USER CODE END I2C1_Init 1 */
+  hi2c1.Instance = I2C1;
+  hi2c1.Init.ClockSpeed = 400000;
+  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
+  hi2c1.Init.OwnAddress1 = 0;
+  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c1.Init.OwnAddress2 = 0;
+  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN I2C1_Init 2 */
+
+  /* USER CODE END I2C1_Init 2 */
+
 }
 
 /**
@@ -352,6 +421,39 @@ static void MX_SPI1_Init(void)
 }
 
 /**
+  * @brief USART1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART1_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART1_Init 0 */
+
+  /* USER CODE END USART1_Init 0 */
+
+  /* USER CODE BEGIN USART1_Init 1 */
+
+  /* USER CODE END USART1_Init 1 */
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = 115200;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_HalfDuplex_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART1_Init 2 */
+
+  /* USER CODE END USART1_Init 2 */
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -367,6 +469,7 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOH_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(ILI9341_CS_GPIO_Port, ILI9341_CS_Pin, GPIO_PIN_SET);
@@ -376,6 +479,9 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(ILI9341_RST_GPIO_Port, ILI9341_RST_Pin, GPIO_PIN_SET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : Key_1_Pin */
   GPIO_InitStruct.Pin = Key_1_Pin;
@@ -396,6 +502,19 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(ILI9341_RST_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PC5 */
+  GPIO_InitStruct.Pin = GPIO_PIN_5;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PB1 */
+  GPIO_InitStruct.Pin = GPIO_PIN_1;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -436,19 +555,33 @@ void lv_Timerhandler_Task(void *argument)
 {
   /* USER CODE BEGIN lv_Timerhandler_Task */
   /* Infinite loop */
-	LCD_Fill(0xFFFF);   /* 先刷白，给 LVGL 一个干净画布 */
-	  lv_port_init();
-	  ui_init();
+    LOG("BUILD %s %s\r\n", __DATE__, __TIME__);
+
+    LOG("1: touch init...\r\n");
+    ft6336_init();
+    LOG("1: done\r\n");
+
+    LOG("2: lvgl init...\r\n");
+    lv_port_init();
+    LOG("2: done\r\n");
+
+    LOG("3: ui init...\r\n");
+    ui_init();
+    LOG("3: done\r\n");
+	  ft6336_indev_init();//触摸屏初始化
 	  static vitals_t v = { 76, 98, 36.5f, 16, 0 };
 	  ui_update(&v);
 		osSemaphoreAcquire(myBinarySem01Handle, 0);
   for(;;)
   {
+	  LOG("4: done\r\n");
 		if(osSemaphoreAcquire(myBinarySem01Handle,0)==osOK)
 		{
 			;
 		}
+		LOG("5: done\r\n");
 	lv_timer_handler();
+	LOG("6: done\r\n");
     osDelay(5);
   }
   /* USER CODE END lv_Timerhandler_Task */

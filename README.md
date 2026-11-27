@@ -1,8 +1,10 @@
-# 病床体征监测终端（Bed_Detective）
+# 病床体征监测终端（Bed_Detective2）
 
-基于 **STM32F407VET6 + FreeRTOS + LVGL 9.5** 的体征监测终端原型：本地图形界面显示血氧、心率、呼吸、体温，超阈值时给出三级视觉报警，并把采集与显示拆成独立任务。
+基于 **STM32F407VET6 + FreeRTOS + LVGL 9.5** 的体征监测终端：3.5 寸触摸屏做本地交互，显示血氧、心率、呼吸、体温，超阈值时三级报警。
 
-**当前进度**：界面框架、任务调度、RTC 时间均已跑通；传感器模块待接入（界面数据暂用模拟值）。
+> 本工程是从 `Bed_Detective` 分出来的**显示与交互验证分支**，主攻 ST7796 + 电容触摸这条链路。
+
+**当前进度**：显示、触摸、界面框架、RTC、页面切换已跑通；传感器（MAX30102 / MLX90614 / HX711）待接入，界面数值暂用模拟数据。
 
 ---
 
@@ -11,177 +13,187 @@
 | 项目 | 型号 / 参数 |
 |---|---|
 | 主控 | STM32F407VET6（Cortex-M4F，168 MHz，512 KB Flash / 192 KB RAM） |
-| 显示屏 | 2.4" TFT，240×320，ILI9341，SPI 接口 |
-| 接线 | SCK=PA5，MOSI=PA7，CS=PA4，DC=PA6，RST=PC4 |
-| 按键 | Key_1（上拉输入，低电平有效） |
-| 时钟源 | LSE 32.768 kHz 晶振（RTC） |
+| 显示屏 | 3.5" TFT，320×480，**ST7796**，SPI 接口 |
+| 触摸 | **FT6336U** 电容触摸，I2C 接口，地址 `0x38` |
+| RTC | LSE 32.768 kHz 晶振 |
+| 调试串口 | USART1（PA9/PA10），115200 |
+
+### 接线
+
+**显示（SPI1，最高 42 MHz）**
+
+| ST7796 模块 | F407 |
+|---|---|
+| VCC / GND | 3.3V / GND |
+| CS | PA4 |
+| RESET | PC4 |
+| DC | PA6 |
+| SDI(MOSI) | PA7 |
+| SCK | PA5 |
+| LED | 3.3V |
+| SDO(MISO) | 不接（Transmit Only） |
+
+**触摸（I2C1，400 kHz）**
+
+| 模块丝印 | 电容模式 | F407 |
+|---|---|---|
+| T_SDI | SDA | PB7 |
+| T_CLK | SCL | PB6 |
+| T_CS | RST | PC5 |
+| T_IRQ | INT | 不接（轮询） |
+| T_SDO | NC | 不接 |
+
+> 注意：这块模块的 5 个触摸脚在**电阻模式下定义完全不同**，上表是电容模式。
 
 ---
 
 ## 软件架构
 
-### 任务划分
+### 任务
 
 | 任务 | 优先级 | 栈 | 职责 |
 |---|---|---|---|
-| `KEY_Task` | Low1 | 512 B | 30 ms 周期扫描按键，检测到按下后释放二值信号量 |
-| `lv_Timerhandler_Task` | Low | 4 KB | LVGL 主循环：处理事件、`lv_timer_handler()`、5 ms 轮询 |
-| `StartDefaultTask` | Normal | 512 B | CubeMX 默认任务，预留 |
+| `KEY_Task` | Low1 | 512 B | 30 ms 扫描按键，释放二值信号量 |
+| `lv_Timertask` | Low | **6 KB** | LVGL 主循环：`lv_timer_handler()`，5 ms 一轮 |
+| `StartDefaultTask` | Normal | 512 B | 预留 |
 
 ```
-KEY_Task ──(osSemaphoreRelease)──▶ [二值信号量] ──(osSemaphoreAcquire)──▶ lv_Timerhandler_Task
-                                                                              │
-                                                                     lv_timer_handler()
-                                                                              │
-                                                                        disp_flush()
-                                                                              │
-                                                                     SPI1 ─▶ ILI9341
+KEY_Task ──信号量──▶ lv_Timertask ──lv_timer_handler()──▶ disp_flush() ──SPI1──▶ ST7796
+                          │
+                          └── indev_read_cb() ◀── I2C1 ◀── FT6336U
 ```
 
-### 关键设计
+**重要约定：LVGL 的所有 API 只在 `lv_Timertask` 中调用。** 其他任务只写共享变量或投递消息，不碰控件。
 
-- **LVGL 只在 `lv_Timerhandler_Task` 内调用**，其他任务通过信号量传递事件，避免跨任务操作对象树
-- **显示缓冲区** 240×40×2 = 19.2 KB，`LV_DISPLAY_RENDER_MODE_PARTIAL` 局部刷新
-- **tick 来源** `lv_tick_set_cb(HAL_GetTick)`，不额外占用定时器
-- **`disp_flush`** 设置窗口 → 拉低 CS → SPI 发送 → `lv_display_flush_ready()`
+### LVGL 关键配置
+
+| 配置 | 值 | 说明 |
+|---|---|---|
+| `LV_COLOR_DEPTH` | 16 | RGB565 |
+| `LV_MEM_SIZE` | **64 KB** | 32/48 KB 会在创建控件时耗尽并触发断言 |
+| `LV_USE_OS` | **`LV_OS_NONE`** | 单任务访问，不需要锁（配 `FREERTOS` 会死锁，见踩坑 5） |
+| `LV_DEF_REFR_PERIOD` | 33 ms | ≈30 fps |
+| 显示缓冲 | 320 × 40 × 2 = 25.6 KB | PARTIAL 局部刷新 |
+| 颜色格式 | `LV_COLOR_FORMAT_RGB565_SWAPPED` | ILI9341/ST7796 走 SPI 需要高字节先发 |
+| 编译优化 | **`-Os`** | Debug 用 `-O0` 会 Flash 溢出且渲染慢 3–5 倍 |
 
 ---
 
-## 界面设计
-
-240×320 单页布局，只放临床上最关键的三项体征，避免信息过载：
+## 界面
 
 ```
 ┌────────────────────────┐
-│ ● NORMAL      12:30    │  ← 状态条：绿/黄/红
+│ ● NORMAL      12:30    │  状态条：绿/黄/红 + LED + RTC 时间
 ├────────────────────────┤
-│   SpO2       98   %    │  ← 28 号字
+│   SpO2       98   %    │  28 号字
 │   HR         76   bpm  │
 ├────────────────────────┤
 │   RR         16   /min │
-│   TEMP       36.5 C    │
+│   TEMP       36.5 C    │  标注体表温度
 ├────────────────────────┤
-│  [ DETAIL ] [ TREND ]  │
+│  [ DETAIL ] [ TREND ]  │  切换页面（带 400 ms 防重入）
 └────────────────────────┘
 ```
 
-**设计要点**
-
-- **颜色编码**：绿 `0x00C853` / 黄 `0xFFB300` / 红 `0xD50000`，符合医疗报警三色约定
-- **数值优先**：主数值 28 号字，标签与单位 14 号字
-- **纯 ASCII**：界面文案用 `SpO2 / HR / RR / TEMP`，避免中文字体占用 Flash（完整中文字库数 MB，子集字体需额外工具生成）
-- **占位提示**：体温标注为体表温度，不与核心体温混用
-
----
-
-## 时间
-
-- RTC 时钟源 **LSE（32.768 kHz）**，分频 127/255 得到 1 Hz
-- CubeMX 生成的初始化会**无条件重设时间**，已用备份寄存器规避：
-
-```c
-/* 已初始化过则保留当前时间 */
-if (HAL_RTCEx_BKUPRead(&hrtc, RTC_BKP_DR0) == 0x32F2) {
-    return;
-}
-/* ...设置初始时间后... */
-HAL_RTCEx_BKUPWrite(&hrtc, RTC_BKP_DR0, 0x32F2);
-```
-
-- 按 RST 不会重置时间（备份域不断电）；完全断电且无纽扣电池才会回到初始值
-- 调试需要改时间时，可按住 Key_1 上电强制重设
-
-> 注意：`HAL_RTC_GetTime()` 之后**必须**再调一次 `HAL_RTC_GetDate()`，否则影子寄存器不更新，读到的永远是旧值。
-
----
-
-## 目录结构
-
-```
-Bed_Detective/
-├── Core/             CubeMX 生成的初始化与主函数（含 RTC）
-├── USER/
-│   ├── LCD.c/.h      ILI9341 SPI 驱动（初始化序列、窗口设置、填充）
-│   ├── lv_port.c/.h  LVGL 移植层（display、flush、tick）
-│   ├── KEYs/         按键扫描（状态机，下降沿检测）
-│   ├── ui/           界面：布局、状态条、数值更新、页面切换
-│   └── User_Task/    用户任务与事件回调
-├── Middlewares/      FreeRTOS 与 CMSIS-RTOS2
-├── Drivers/          HAL 与 CMSIS
-└── lvgl/             LVGL 9.5（第三方，未纳入仓库）
-```
+- 文案全英文：Montserrat 只有 ASCII，中文需要单独做子集字体
+- 颜色编码遵循医疗报警约定：`#00C853` / `#FFB300` / `#D50000`
+- 切页用 `LV_SCR_LOAD_ANIM_NONE`：SPI 屏上全屏动画太慢，容易堆积触摸事件
 
 ---
 
 ## 构建
 
-1. 下载 [LVGL 9.5.0](https://github.com/lvgl/lvgl/releases)，把 `lvgl` 目录放到工程根目录
-2. 删除 `lvgl/src/drivers`（PC 平台驱动，MCU 用不到）
-3. `lv_conf.h` 顶部 `#if 0` 改为 `#if 1`，并关闭未使用的解码器
-4. 用 STM32CubeIDE 打开工程，`Project → Build`
-5. ST-Link 下载
+1. 下载 [LVGL 9.5](https://github.com/lvgl/lvgl)，把 `lvgl` 目录放到工程根目录
+2. 删除 `lvgl/src/drivers`（PC 平台驱动）和 `lvgl/src/libs` 下依赖外部库的目录（thorvg、libpng、libjpeg_turbo、libwebp、freetype、ffmpeg、rlottie、gltf、svg）
+3. `lv_conf.h` 顶部 `#if 0` 改为 `#if 1`
+4. STM32CubeIDE 打开工程，确认优化等级为 `-Os`，Build
+5. `Debug/Bed_Detective2.elf` 时间戳必须是新的，再下载
 
-> 仓库不含 `lvgl/` 目录：它是第三方库（400+ 文件、20 MB），会淹没本项目的代码。
+> 仓库不含 `lvgl/` 目录：第三方库 400+ 文件、20 MB。
 
 ---
 
-## 踩过的坑
+## 踩坑记录
 
-每个都花了不短时间才定位，记录下来：
+每一条都真实卡了一小时以上，记下来免得重犯。
 
-### 1. LVGL 任务栈溢出导致白屏
+### 1. 改了代码却没有任何变化
 
-初始栈 `256 * 4 = 1 KB`，LVGL 渲染调用链过深直接溢出进 HardFault。
-**现象**：程序在跑、LED 正常，但屏幕永远停在初始化后的状态。
-**修复**：栈改为 `1024 * 4`（4 KB）。可用 `uxTaskGetStackHighWaterMark()` 定量确认余量。
+CubeIDE 在**编译失败时仍会把上一次成功的 ELF 烧进去**，看起来"下载成功、程序在跑"，其实跑的是旧代码。
 
-### 2. 二值信号量初值为 1，上电自动触发
+**对策**：每次下载前确认 `Debug/*.elf` 的时间戳晚于最后一次修改。
 
-`osSemaphoreNew(1, 1, ...)` 第二个参数是初始计数，为 1 表示"资源一开始就可用"，第一次 `Acquire` 立即成功。
-**修复**：初始计数改为 0，只有真正 `Release` 才生效。
+### 2. `file format not recognized`
 
-### 3. 按键扫描状态机写错
+ELF 文件头变成 `00 00 00 00`（构建被中断）。删掉 ELF → `Project → Clean` → 重新 Build。
+
+### 3. Flash 溢出 41 KB
+
+Debug 配置默认 `-O0`，LVGL 在 `-O0` 下体积接近 `-Os` 的两倍。
+
+**对策**：`Tool Settings → Optimization → -Os`。顺带渲染速度提升 3–5 倍。
+
+### 4. `LVGL ASSERT: obj != NULL`（卡在 `lv_label_set_text_vfmt`）
+
+LVGL 内存池不足，`lv_label_create()` 返回 NULL，后续 `lv_label_set_text_fmt()` 直接断言。
+
+**对策**：`LV_MEM_SIZE` 提到 **64 KB**（32 KB / 48 KB 都不够这个界面）。
+
+### 5. 卡在 `lv_timer_handler()`，RTOS 里任务显示"挂起"
+
+`lv_timer_handler()` 第一件事是 `lv_lock()`。当 `LV_USE_OS = LV_OS_FREERTOS` 时，这个互斥量在移植后进了异常状态，任务永远等锁——**不是死循环，是死锁**。
+
+**对策**：改成 `LV_USE_OS = LV_OS_NONE`，并严格遵守"LVGL 只在 LVGL 任务里调用"。
+
+> 排查线索：任务状态是"挂起"而不是"运行"，说明它在阻塞，不是死循环。
+
+### 6. 触摸假点导致界面自动切页
+
+无手指时 FT6336U 仍偶发上报触摸点，触发 `CLICKED`，配合切页动画产生"自动切换又切回来"。
+
+**对策**：三层防护
 
 ```c
-HAL_GPIO_ReadPin(...);                              /* 读了但没存，Current 永远是初值 */
-if (Previous == SET && Current == RESET) return 1;
-Current = Previous;                                  /* 方向反了 */
+/* ① 点数必须为 1~2 */
+if (n == 0 || n > 2) return false;
+/* ② 坐标必须在屏幕范围内 */
+if (tx >= 320 || ty >= 480) return false;
+/* ③ 连续 3 次按下才认为有效，连续 2 次松开才释放 */
 ```
-**修复**：读值赋给 `Current`，判断后执行 `Previous = Current`，并补上 `return`。
 
-### 4. 屏幕整体反色
+### 7. 屏幕整体反色
 
-按钮蓝色显示成黄色、红色区域发青 —— 面板处于反显状态。
-**修复**：初始化序列末尾发送 `0x21`（INVON）。不同批次模块可能相反，`0x20` / `0x21` 互换即可。
+蓝色显示成黄色、红色发青 → 面板默认处于反显状态。
 
-### 5. LVGL 的 `lv_conf.h` 模板默认关闭
+**对策**：初始化末尾发 `0x21`（INVON）。不同批次模块可能相反，`0x20` / `0x21` 互换即可。
 
-模板顶部是 `#if 0`，只改文件名不改这行，所有配置都不生效，导致 `LV_USE_LIBPNG` 等默认开启、去 include 已删除的目录。
-**修复**：改成 `#if 1`，同步关闭未使用的解码器宏。
+### 8. `lv_label_set_text_fmt` 里 `%f` 输出成 "f"
 
-### 6. CubeIDE 增量构建的假错误
+LVGL 自带 `lv_snprintf` 不支持浮点（`LV_USE_FLOAT 0`）。
 
-修改 `.cproject` 后不重新生成 makefile，会出现"上次的错误还在、但编译其实成功"的假象。
-**修复**：`Project → Clean` 后重新 Build；或删除 `Debug/` 目录。
+**对策**：温度用整数放大十倍处理，`"%d.%d"` 拼接显示，全程不碰浮点。
 
 ---
 
 ## 进度
 
-- [x] FreeRTOS 任务框架 + 信号量事件
+- [x] FreeRTOS 任务框架 + 信号量
 - [x] LVGL 9.5 移植（SPI 显示、局部刷新）
-- [x] ILI9341 驱动与颜色校正
-- [x] 主页界面（状态条 + 三参数 + 按钮）
+- [x] ST7796 显示 + 颜色校正
+- [x] FT6336U 触摸（含去抖）
+- [x] 主页界面（状态条 + 四参数 + 按钮）
+- [x] 页面切换（防重入）
 - [x] RTC 时间（LSE + 备份寄存器）
-- [ ] 传感器接入（心率 / 血氧 / 体表温度）
-- [ ] 报警阈值与状态机
+- [x] 编译优化与内存调优
+- [ ] 传感器接入（MAX30102 / MLX90614 / HX711）
+- [ ] 报警状态机 + 声光报警
 - [ ] 趋势页（`lv_chart`）
 - [ ] SPI 改 DMA + 双缓冲
-- [ ] 呼吸频率（称重传感器阵列方案）
-- [ ] CAN 上报
+- [ ] 第二块屏（ILI9341 床旁显示，SPI2）
+- [ ] WiFi 上报（ESP8266）
 
 ---
 
 ## 许可
 
-仅用于学习与毕业设计，第三方库遵循各自许可（LVGL MIT、ST HAL BSD-3-Clause、FreeRTOS MIT）。
+仅用于学习与毕业设计。第三方库遵循各自许可（LVGL MIT、ST HAL BSD-3-Clause、FreeRTOS MIT）。
