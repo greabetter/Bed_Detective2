@@ -249,11 +249,19 @@ void ui_init(void)
    lv_timer_create(clock_cb, 1000, NULL);
 }
 
+
+
+
+/* ================= 切屏判断 ================= */
+static bool ui_is_main_active(void)
+{
+    return lv_screen_active() == main_scr;
+}
 /* ================= 更新 ================= */
 void ui_update(const vitals_t * v)
 {
     if (v == NULL) return;
-
+    if (!ui_is_main_active()) return;
     int t10 = (int)(v->temp * 10.0f + 0.5f);
 
     lv_label_set_text_fmt(lbl_spo2, "%d", v->spo2);
